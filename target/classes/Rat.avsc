@@ -1,4 +1,4 @@
-{"namespace": "edu.stthomas.gps",
+{"namespace": "edu.pa",
  "type": "record",
  "name": "Rat",
  "fields": [

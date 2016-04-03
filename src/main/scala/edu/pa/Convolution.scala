@@ -1,3 +1,5 @@
+package edu.pa
+
 import java.io.IOException
 
 import org.apache.avro.mapred.AvroKey
