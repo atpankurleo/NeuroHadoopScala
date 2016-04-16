@@ -6,6 +6,7 @@ import org.apache.avro.mapred.AvroKey
 import org.apache.avro.mapreduce.{AvroKeyOutputFormat, AvroJob, AvroMultipleOutputs}
 import org.apache.hadoop.fs.Path
 import org.apache.hadoop.io.NullWritable
+import org.apache.hadoop.mapred.JobConf
 import org.apache.hadoop.mapreduce.Job
 import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat
 import org.apache.spark.SparkContext._
@@ -35,27 +36,43 @@ object Convolution {
   private var multipleOutputs: AvroMultipleOutputs = null
   private var rat: Rat = new Rat
   private var outkey: AvroKey[Rat] = new AvroKey[Rat](rat)
+  var ratRecords: List[Rat] = List()
 
   def main(args: Array[String]) {
-    //val conf = new SparkConf().setMaster("local[1]").setAppName("Neurohadoop scala")
-    val sparkConf = new SparkConf().setAppName("Neurohadoop scala")
+    val sparkConf = new SparkConf().setMaster("local[1]").setAppName("Neurohadoop scala")
+    //val sparkConf = new SparkConf().setAppName("Neurohadoop scala")
+    sparkConf.set("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
+    //MyKryoRegistrator.register(sparkConf)
     val sc: SparkContext = new SparkContext(sparkConf)
-    //var lookup = sc.textFile("morlet-2000.dat")
-    var lookup = sc.textFile("hdfs:///neuro/lookup/morlet-2000.dat")
-    var broadVar = sc.broadcast(lookup.collect())
+
+    var lookup = sc.textFile("morlet-2000.dat")
+    //val lookup = sc.textFile("hdfs:///neuro/lookup/morlet-2000.dat")
+    val broadVar = sc.broadcast(lookup.collect())
     println(broadVar.value.length)
     this.loadKernel(broadVar.value)
     this.setup()
-    //var lines = sc.textFile("R192-2009-11-19-CSC10a.csv")
-    var lines = sc.textFile("hdfs:///neuro/input/R192-2009-11-19-CSC10a.csv")
-    var partOneLines = sc.parallelize(lines.collect(), 1)
+
+    var lines = sc.textFile("R192-2009-11-19-CSC10a.csv")
+    //val lines = sc.textFile("hdfs:///neuro/input/R192-2009-11-19-CSC10a.csv")
+    val partOneLines = sc.parallelize(lines.collect(), 1)
     System.out.println(partOneLines.take(5))
-    var parseLines = partOneLines.map(x => new RatInputFormat().parse(x.toString()))
-    /*var parseLines = lines.map(x => x.split(","))*/
+    val parseLines = partOneLines.map(x => new RatInputFormat().parse(x.toString()))
     println(parseLines.collect())
-    var populateArrays = parseLines.map(x => createTimeAndVoltageArray(x))
+    val populateArrays = parseLines.map(x => createTimeAndVoltageArray(x))
     println(populateArrays.take(5))
-    cleanup()
+
+    this.cleanup()
+
+    val records = sc.parallelize(ratRecords)
+    val withValues = records.map((x) => (new AvroKey(x), NullWritable.get))
+
+    val conf = new Job()
+    FileOutputFormat.setOutputPath(conf, new Path(fn))
+    val schema = Rat.SCHEMA$
+    AvroJob.setOutputKeySchema(conf, schema)
+    conf.setOutputFormatClass(classOf[AvroKeyOutputFormat[Rat]])
+    withValues.saveAsNewAPIHadoopDataset(conf.getConfiguration)
+
   }
 
   def ConvertStringArrayToShortArray(stringArray: Array[String]): Array[Short] = {
@@ -164,7 +181,7 @@ object Convolution {
 
         println("Complex inverse completed")
 
-        var records = List()
+
         for (i <- (SIGNAL_BUFFER_SIZE / 2 - KERNEL_WINDOW_SIZE + 1) * 2 until (SIGNAL_BUFFER_SIZE / 2 - n) * 2 by -2) {
           rat.setTime(timestamp(t).toInt)
           rat.setFrequency(k.toInt)
@@ -173,19 +190,9 @@ object Convolution {
           println(rat.getTime + "--" + rat.getFrequency + "--" + rat.getConvolution)
           //multipleOutputs.write("AVRO", outkey, NullWritable.get, fn)
           t += 1
-          //records = records :: rat
+          ratRecords = rat :: ratRecords
         }
       }
-
-      /*val records = sc.parallelize(Array(Rat))
-      val withValues = records.map((x) => (new AvroKey(x), NullWritable.get))
-
-      val conf = new Job()
-      FileOutputFormat.setOutputPath(conf, new Path(fn))
-      val schema = Rat.SCHEMA$
-      AvroJob.setOutputKeySchema(conf, schema)
-      conf.setOutputFormatClass(classOf[AvroKeyOutputFormat[Rat]])
-      withValues.saveAsNewAPIHadoopDataset(conf.getConfiguration)*/
 
     } catch {
       case ioe: IOException => {
