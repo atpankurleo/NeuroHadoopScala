@@ -24,4 +24,8 @@ class RatInputFormat extends Serializable{
     rec.voltage = values(1).trim
     return rec
   }
+
+  override def toString = {
+    this.timestamp + "--" + this.voltage
+  }
 }

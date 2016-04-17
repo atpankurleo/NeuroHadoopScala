@@ -135,10 +135,6 @@
       <name>Scala-tools Maven2 Repository</name>
       <url>http://scala-tools.org/repo-releases</url>
     </repository>
-    <repository>
-      <id>cloudera-repo-releases</id>
-      <url>https://repository.cloudera.com/artifactory/repo/</url>
-    </repository>
   </repositories>
   <dependencies>
     <dependency>
