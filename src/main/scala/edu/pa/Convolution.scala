@@ -16,11 +16,14 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.{TaskContext, Partition, SparkContext, SparkConf}
 
 import scala.collection.mutable
+import org.apache.spark.sql.SQLContext
 
 
 /**
   * Created by Ankur on 3/22/2016.
   */
+case class RatRecord(time: Int, frequency: Int, convolution: Float)
+
 object Convolution {
   val SIGNAL_BUFFER_SIZE: Int = 16777216
   val KERNEL_START_FREQ: Int = 5
@@ -36,13 +39,15 @@ object Convolution {
   private var tempTime: Long = 0L
   private var fn: String = null
   private var rat: Rat = new Rat
-  private var ratRecords: List[Rat] = List()
+  private var ratRecords: Array[Rat] = new Array[Rat](1294750912)
 
   def main(args: Array[String]) {
     //val sparkConf = new SparkConf().setMaster("local[1]").setAppName("Neurohadoop scala")
     val sparkConf = new SparkConf().setAppName("Neurohadoop scala")
     RatKryoRegistrator.register(sparkConf)
     val sc: SparkContext = new SparkContext(sparkConf)
+    val sqlContext = new org.apache.spark.sql.SQLContext(sc)
+    import sqlContext.implicits._
 
     //var lookup = sc.textFile("morlet-2000.dat")
     val lookup = sc.textFile("hdfs:///neuro/lookup/morlet-2000.dat")
@@ -67,57 +72,31 @@ object Convolution {
     signals = null
     timestamps = null
 
-    /*println("Input file count " + lines.count())
-    //val partOneLines = sc.parallelize(lines.collect())
-    //System.out.println(partOneLines.take(5))
-    var ratin: RatInputFormat  = new RatInputFormat()
-    val parseLines = lines.map {x =>
-      var values: Array[String] = x.toString.split(",")
-      /*if (values.length != 2) {
-        return null
-      }*/
-      ratin.timestamp = values(0).trim
-      ratin.voltage = values(1).trim
-      println("Parselines :" + ratin)
-      ratin
-    }
-    println("Parselines count: " + parseLines.count())
-    //println(parseLines.collect())
-    val populateArrays = parseLines.map{x =>
-      try {
-        println(x)
-        if (lastTimestamp > x.getTimestamp) {
-          throw new IOException("Timestamp not sorted at: " + lastTimestamp + " and " + x.getTimestamp)
-        }
-        lastTimestamp = x.getTimestamp
-        timestamp(nIndex) = lastTimestamp
-        signal(nIndex) = x.getVoltage
-        nIndex += 1
-      }
-      catch {
-        case ioe: IOException => {
-          System.err.println(ioe.getMessage)
-          System.exit(0)
-        }
-      }
-    }
-    println("timestamp size :"+ timestamp.size)
-    for(i <- 0 until timestamp.length)println(timestamp(i))
-    println("signla size :" + signal.size)
-    println("Populate Array :"+ populateArrays.count())*/
-    //println(populateArrays.take(5))
-
     this.cleanup(sc)
 
-    val records = sc.parallelize(ratRecords, 1)
-    val withValues = records.map((x) => (new AvroKey(x), NullWritable.get))
+    val records = sc.parallelize(ratRecords)
+    println("Parallelized rats")
+    ratRecords = null
+    signal = null
+    timestamp = null
+    kernel = null
+    kernelMap = null
+    kernelStack = null
 
-    val conf = new Job()
+    val withValues = records.map(x => RatRecord(x.getTime, x.getFrequency, x.getConvolution)).toDF()
+    //val withValues = records.map(_).toDF()
+    println("Creating avro job")
+    withValues.saveAsParquetFile("rats.parquet")
+
+
+
+   /* var conf = new Job()
     FileOutputFormat.setOutputPath(conf, new Path(fn))
     val schema = Rat.SCHEMA$
     AvroJob.setOutputKeySchema(conf, schema)
     conf.setOutputFormatClass(classOf[AvroKeyOutputFormat[Rat]])
-    withValues.saveAsNewAPIHadoopDataset(conf.getConfiguration)
+    println("writing to file begins")
+    withValues.saveAsNewAPIHadoopDataset(conf.getConfiguration)*/
 
   }
 
@@ -133,7 +112,7 @@ object Convolution {
     fn = this.generateFileName("R192-2009-11-19-CSC10a.csv")
     for (index <- KERNEL_START_FREQ to KERNEL_END_FREQ) {
       val str:String = kernelMap.getOrElse(index, null)
-      println("index :" + index + "value: "+str)
+      //println("index :" + index + "value: "+str)
       kernelStack(index) = ConvertStringArrayToShortArray(str.split(","))
     }
   }
@@ -197,6 +176,7 @@ object Convolution {
   }
 
   def cleanup(sc: SparkContext) {
+    var count:Int = 0;
     println("Starting Convolution")
     val fft: FloatFFT_1D = new FloatFFT_1D(SIGNAL_BUFFER_SIZE / 2)
     try {
@@ -229,24 +209,25 @@ object Convolution {
 
         var t: Int = KERNEL_WINDOW_SIZE - 1
 
-        println("Complex inverse completed")
+        //println("Complex inverse completed")
 
         //println("Kernel Window size "+ KERNEL_WINDOW_SIZE)
-        println("NIndex value:" + nIndex)
+        //println("NIndex value:" + nIndex)
         //var ratList:List[Rat] = List()
         for (i <- (SIGNAL_BUFFER_SIZE / 2 - KERNEL_WINDOW_SIZE + 1) * 2 until (SIGNAL_BUFFER_SIZE / 2 - nIndex) * 2 by -2) {
           rat.setTime(timestamp(t).toInt)
-          rat.setFrequency(k.toShort)
+          rat.setFrequency(k.toInt)
           rat.setConvolution(Math.pow(kernel(i), 2).toFloat)
 
           t += 1
-          ratRecords = rat :: ratRecords
+          ratRecords(count) = rat
+          count += 1
           //ratList = rat :: ratList
         }
         //ratRecords.++(sc.parallelize(ratList,1))
-        println("Ratrecords count:" + ratRecords.size)
+        //println("Ratrecords count:" + ratRecords.size)
       }
-
+      println("total rat count: " + count)
     } catch {
       case ioe: IOException => {
         System.err.println(ioe.getMessage)
