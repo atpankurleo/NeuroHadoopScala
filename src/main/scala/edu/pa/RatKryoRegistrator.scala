@@ -10,7 +10,7 @@ import org.apache.spark.serializer.{KryoSerializer, KryoRegistrator}
 
 class RatKryoRegistrator extends KryoRegistrator {
   override def registerClasses(kryo: Kryo) {
-    kryo.register(classOf[Rat])
+    kryo.register(classOf[RatRecord])
   }
 }
 

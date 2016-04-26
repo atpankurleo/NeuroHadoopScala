@@ -16,7 +16,7 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.{TaskContext, Partition, SparkContext, SparkConf}
 
 import scala.collection.mutable
-import org.apache.spark.sql.SQLContext
+import org.apache.spark.sql.{SaveMode, SQLContext}
 
 
 /**
@@ -72,9 +72,9 @@ object Convolution {
     signals = null
     timestamps = null
 
-    this.cleanup(sc)
+    this.cleanup(sc, sqlContext)
 
-    val records = sc.parallelize(ratRecords)
+    val records = sc.parallelize(ratRecords, 196)
     println("Parallelized rats")
     ratRecords = null
     signal = null
@@ -84,6 +84,7 @@ object Convolution {
     kernelStack = null
 
     val withValues = records.map(x => RatRecord(x.getTime, x.getFrequency, x.getConvolution)).toDF()
+    //withValues.save("rats.parquet", SaveMode.Append)
     //val withValues = records.map(_).toDF()
     println("Creating avro job")
     withValues.saveAsParquetFile("rats.parquet")
@@ -98,6 +99,14 @@ object Convolution {
     println("writing to file begins")
     withValues.saveAsNewAPIHadoopDataset(conf.getConfiguration)*/
 
+  }
+
+  def createOutputFile(ratRecords: Array[Rat], sc: SparkContext, sqlContext: SQLContext) {
+    val records = sc.parallelize(ratRecords, 1)
+    //val withValues = records.map(x => RatRecord(x.getTime, x.getFrequency, x.getConvolution)).toDf()
+    //withValues.save("rats.parquet", SaveMode.Append)
+    //val withValues = records.map(_).toDF()
+    println("Creating avro job")
   }
 
   def ConvertStringArrayToShortArray(stringArray: Array[String]): Array[Short] = {
@@ -175,7 +184,7 @@ object Convolution {
     return "rat=" + ratnumber + "/dt=" + sessiondate + "/channel=" + channelid + "/" + ratnumber + "-" + sessiondate + "-" + channelid
   }
 
-  def cleanup(sc: SparkContext) {
+  def cleanup(sc: SparkContext, sqlContext: SQLContext) {
     var count:Int = 0;
     println("Starting Convolution")
     val fft: FloatFFT_1D = new FloatFFT_1D(SIGNAL_BUFFER_SIZE / 2)
@@ -222,7 +231,6 @@ object Convolution {
           t += 1
           ratRecords(count) = rat
           count += 1
-          //ratList = rat :: ratList
         }
         //ratRecords.++(sc.parallelize(ratList,1))
         //println("Ratrecords count:" + ratRecords.size)
@@ -231,7 +239,7 @@ object Convolution {
     } catch {
       case ioe: IOException => {
         System.err.println(ioe.getMessage)
-        System.exit(0)
+        //System.exit(0)
       }
     }
   }

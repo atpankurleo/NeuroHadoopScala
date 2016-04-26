@@ -1,8 +1,8 @@
 [36mDiscovery starting.[0m
-[36mDiscovery completed in 244 milliseconds.[0m
+[36mDiscovery completed in 830 milliseconds.[0m
 [36mRun starting. Expected test count is: 0[0m
 [32mDiscoverySuite:[0m
-[36mRun completed in 329 milliseconds.[0m
+[36mRun completed in 1 second, 133 milliseconds.[0m
 [36mTotal number of tests run: 0[0m
 [36mSuites: completed 1, aborted 0[0m
 [36mTests: succeeded 0, failed 0, canceled 0, ignored 0, pending 0[0m
