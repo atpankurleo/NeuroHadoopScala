@@ -38,8 +38,11 @@ object Convolution {
   private var lastTimestamp: Long = 0
   private var tempTime: Long = 0L
   private var fn: String = null
-  private var rat: Rat = new Rat
-  private var ratRecords: Array[Rat] = new Array[Rat](1294750912)
+  var ratRDD: RDD[RatRecord] = null
+  //private var rat: Rat = new Rat
+  //private var ratRecords: Array[RatRecord] = new Array[RatRecord](1294750912)
+  //private var ratRecords: Array[RatRecord] = new Array[RatRecord](10000)
+  private var ratRecords: Array[RatRecord] = new Array[RatRecord](5000000)
 
   def main(args: Array[String]) {
     //val sparkConf = new SparkConf().setMaster("local[1]").setAppName("Neurohadoop scala")
@@ -50,14 +53,14 @@ object Convolution {
     import sqlContext.implicits._
 
     //var lookup = sc.textFile("morlet-2000.dat")
-    val lookup = sc.textFile("hdfs:///neuro/lookup/morlet-2000.dat")
-    val broadVar = sc.broadcast(lookup.collect())
+    var lookup = sc.textFile("hdfs:///neuro/lookup/morlet-2000.dat")
+    var broadVar = sc.broadcast(lookup.collect())
     println(broadVar.value.length)
     this.loadKernel(broadVar.value)
     this.setup()
 
-    //val lines = sc.textFile("R192-2009-11-19-CSC10a.csv")
-    val lines = sc.textFile("hdfs:///neuro/input/R192-2009-11-19-CSC10a.csv")
+    //var lines = sc.textFile("R192-2009-11-19-CSC10a.csv")
+    var lines = sc.textFile("hdfs:///neuro/input/R192-2009-11-19-CSC10a.csv")
       .map(_.toString.split(",")).filter( _.length == 2)
     var timestamps = lines.map(x => x(0).trim).collect()
     println("timestamp count: " + timestamps.size)
@@ -71,10 +74,14 @@ object Convolution {
     }
     signals = null
     timestamps = null
+    lines = null
+    lookup = null
+    broadVar = null
 
     this.cleanup(sc, sqlContext)
 
-    val records = sc.parallelize(ratRecords, 196)
+    //val records = sc.parallelize(ratRecords, 196)
+    //ratRDD.saveAsTextFile("ratrecordstext")
     println("Parallelized rats")
     ratRecords = null
     signal = null
@@ -82,14 +89,18 @@ object Convolution {
     kernel = null
     kernelMap = null
     kernelStack = null
+    ratRDD = null
 
-    val withValues = records.map(x => RatRecord(x.getTime, x.getFrequency, x.getConvolution)).toDF()
+    val df = sqlContext.load("rats.parquet")
+    println(df.count())
+
+    //val withValues = records.map(x => RatRecord(x.getTime, x.getFrequency, x.getConvolution)).toDF()
+    //val withValues = ratRDD.map(_.split(",")).map(x => RatRecord(x(0).toInt, x(1).toInt, x(2).toFloat)).toDF()
+    //val withValues = records.toDF()
     //withValues.save("rats.parquet", SaveMode.Append)
     //val withValues = records.map(_).toDF()
-    println("Creating avro job")
-    withValues.saveAsParquetFile("rats.parquet")
-
-
+    //println("Creating avro job")
+    //withValues.saveAsParquetFile("rats.parquet")
 
    /* var conf = new Job()
     FileOutputFormat.setOutputPath(conf, new Path(fn))
@@ -101,12 +112,16 @@ object Convolution {
 
   }
 
-  def createOutputFile(ratRecords: Array[Rat], sc: SparkContext, sqlContext: SQLContext) {
-    val records = sc.parallelize(ratRecords, 1)
+  def createOutputFile(sc: SparkContext, sqlContext: SQLContext) {
+    import sqlContext.implicits._
+    ratRDD = sc.parallelize(ratRecords, 1)
+    var withValues = ratRDD.toDF()
+    //val withValues = ratRDD.map(_.split(",")).map(x => RatRecord(x(0).toInt, x(1).toInt, x(2).toFloat)).toDF()
     //val withValues = records.map(x => RatRecord(x.getTime, x.getFrequency, x.getConvolution)).toDf()
-    //withValues.save("rats.parquet", SaveMode.Append)
+    //println("Started creating out file")
+    withValues.save("rats.parquet", SaveMode.Append)
     //val withValues = records.map(_).toDF()
-    println("Creating avro job")
+    //println("Creating avro job")
   }
 
   def ConvertStringArrayToShortArray(stringArray: Array[String]): Array[Short] = {
@@ -185,7 +200,9 @@ object Convolution {
   }
 
   def cleanup(sc: SparkContext, sqlContext: SQLContext) {
-    var count:Int = 0;
+    import sqlContext.implicits._
+    var count:Int = 0
+    //var rat:Rat = new Rat()
     println("Starting Convolution")
     val fft: FloatFFT_1D = new FloatFFT_1D(SIGNAL_BUFFER_SIZE / 2)
     try {
@@ -218,24 +235,30 @@ object Convolution {
 
         var t: Int = KERNEL_WINDOW_SIZE - 1
 
-        //println("Complex inverse completed")
-
-        //println("Kernel Window size "+ KERNEL_WINDOW_SIZE)
-        //println("NIndex value:" + nIndex)
-        //var ratList:List[Rat] = List()
         for (i <- (SIGNAL_BUFFER_SIZE / 2 - KERNEL_WINDOW_SIZE + 1) * 2 until (SIGNAL_BUFFER_SIZE / 2 - nIndex) * 2 by -2) {
-          rat.setTime(timestamp(t).toInt)
-          rat.setFrequency(k.toInt)
-          rat.setConvolution(Math.pow(kernel(i), 2).toFloat)
 
+          /*rat.setTime(timestamp(t).toInt)
+          rat.setFrequency(k.toInt)
+          rat.setConvolution(Math.pow(kernel(i), 2).toFloat)*/
+          ratRecords(count) = RatRecord(timestamp(t).toInt, k.toInt, Math.pow(kernel(i), 2).toFloat)
+          //ratRecords(count) = timestamp(t).toInt + ","+ k.toInt +","+ Math.pow(kernel(i), 2).toFloat
+          //println(rat.getTime + "--" + rat.getFrequency + "----"+ rat.getConvolution)
           t += 1
-          ratRecords(count) = rat
+
+          //ratRecords(count) = rat
           count += 1
+          if(count == 5000000) {
+            this.createOutputFile(sc, sqlContext)
+            //ratRDD = (ratRDD ++ sc.parallelize(ratRecords.slice(0, count), 196)).coalesce(196)
+            //throw new IOException("Self created exception occured")
+            count = 0
+          }
         }
-        //ratRecords.++(sc.parallelize(ratList,1))
-        //println("Ratrecords count:" + ratRecords.size)
       }
-      println("total rat count: " + count)
+      if( count != 0 ) {
+        ratRecords = ratRecords.slice(0, count)
+        this.createOutputFile(sc, sqlContext)
+      }
     } catch {
       case ioe: IOException => {
         System.err.println(ioe.getMessage)
