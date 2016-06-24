@@ -1,9 +1,0 @@
-{"namespace": "edu.pa",
- "type": "record",
- "name": "Rat",
- "fields": [
-     {"name": "time", "type": "int"},
-     {"name": "frequency",  "type": "int"},
-     {"name": "convolution", "type": "float"}
- ]
-}
