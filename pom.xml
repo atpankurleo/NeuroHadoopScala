@@ -10,7 +10,7 @@
 		<scala.version>2.10.6</scala.version>
 		<scala.binary.version>2.10</scala.binary.version>
 		<scala.version.tools>2.10</scala.version.tools>
-		<spark.version>1.5.0-cdh5.5.1</spark.version>
+		<spark.version>1.6.0</spark.version>
 		<avro.version>1.7.6</avro.version>
 	</properties>
 
@@ -245,6 +245,7 @@
 			<version>2.2.1</version>
 			<scope>test</scope>
 		</dependency>
+
 		<dependency>
 			<groupId>org.apache.avro</groupId>
 			<artifactId>avro-mapred</artifactId>

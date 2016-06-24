@@ -13,22 +13,29 @@ import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat
 import org.apache.spark.SparkContext._
 import org.apache.spark.annotation.DeveloperApi
 import org.apache.spark.rdd.RDD
+import org.apache.spark.sql.catalyst.dsl.expressions
 import org.apache.spark.{TaskContext, Partition, SparkContext, SparkConf}
 
 import scala.collection.mutable
 import org.apache.spark.sql.{SaveMode, SQLContext}
+
+import scala.reflect.internal.util.TableDef.Column
 
 
 /**
   * Created by Ankur on 3/22/2016.
   */
 case class RatRecord(time: Int, frequency: Int, convolution: Float)
+case class PhaseBucket(time: Int, phaserange: Int)
 
 object Convolution {
   val SIGNAL_BUFFER_SIZE: Int = 16777216
   val KERNEL_START_FREQ: Int = 5
   val KERNEL_END_FREQ: Short = 200
   val KERNEL_WINDOW_SIZE: Int = 2001
+  val numBuckets: Int = 75
+  val maxphase: Int = 3141594
+  val minPhase: Int = -3141593
   private var kernelMap: mutable.HashMap[Integer, String] = null
   var kernelStack: Array[Array[Short]] = Array.ofDim(KERNEL_END_FREQ + 1, KERNEL_WINDOW_SIZE)
   private var nIndex: Int = 0
@@ -39,6 +46,7 @@ object Convolution {
   private var tempTime: Long = 0L
   private var fn: String = null
   var ratRDD: RDD[RatRecord] = null
+  private var counter:Int = 0
   //private var rat: Rat = new Rat
   //private var ratRecords: Array[RatRecord] = new Array[RatRecord](1294750912)
   //private var ratRecords: Array[RatRecord] = new Array[RatRecord](10000)
@@ -78,7 +86,7 @@ object Convolution {
     lookup = null
     broadVar = null
 
-    this.cleanup(sc, sqlContext)
+    //this.cleanup(sc, sqlContext)
 
     //val records = sc.parallelize(ratRecords, 196)
     //ratRDD.saveAsTextFile("ratrecordstext")
@@ -91,9 +99,89 @@ object Convolution {
     kernelStack = null
     ratRDD = null
 
-    val df = sqlContext.load("rats.parquet")
-    println(df.count())
+    //val convolutiondata = sqlContext.load("rats.parquet")
+    var convolutiondata = sqlContext.parquetFile("rats")
+    println("Generated Rat records" + convolutiondata.count())
+    convolutiondata.show(20)
+    convolutiondata.printSchema()
+    /*var tempratsavg = convolutiondata.select("time","frequency","dt","convolution").groupBy("time", "frequency").agg(Map(
+      "convolution" -> "avg"
+    ))*/
+    val dtCol = convolutiondata.col("dt")
+    val channelCol = convolutiondata.col("channel")
+    var tempratsavg = convolutiondata.select("time","frequency","dt","convolution").groupBy("time", "frequency").agg(Map(
+      "convolution" -> "avg"
+    ))
 
+    tempratsavg = tempratsavg.withColumnRenamed("time", "time1").withColumnRenamed("frequency", "frequency1")
+    println("Join")
+    tempratsavg.printSchema()
+    //tempratsavg.show(20)
+    //val joinRatsavg = convolutiondata.join(tempratsavg,  convolutiondata("time").as("time1") === tempratsavg("time").as("time2") && convolutiondata("frequency").as("f1") === tempratsavg("frequency").as("f2")).distinct
+    var joinRatsavg = convolutiondata.join(tempratsavg,  convolutiondata("time") === tempratsavg("time1") && convolutiondata("frequency") === tempratsavg("frequency1")).select("rat", "frequency", "channel", "dt", "avg(convolution)", "time").distinct
+    joinRatsavg = joinRatsavg.withColumnRenamed("avg(convolution)", "convolution")
+    println("print joinrats schema")
+    joinRatsavg.printSchema()
+    //joinRatsavg.show(20)
+
+    /*var temp1 = tempratsavg.withColumn("dt",dtCol).withColumn("channel", channelCol)
+    temp1.printSchema()
+    temp1.show(20)*/
+    println("Ratsaverage :" + joinRatsavg.count())
+    joinRatsavg.registerTempTable("ratsaverage")
+    tempratsavg = null
+    convolutiondata = null
+    //println(joinRatsavg.count())
+
+    /*val ratsaverage = sqlContext.sql("select time, frequency, AVG(convolution) as convolution from convolutiondata where rat='R192' and dt='2009-11-19' group by time, frequency")
+    ratsaverage.printSchema()
+    ratsaverage.show(20)
+    ratsaverage.registerTempTable("ratsaverage")*/
+
+   /* var ratstats = joinRatsavg.select("time","frequency","dt","channel", "convolution", "rat").groupBy("rat", "dt", "channel", "frequency").agg(Map(
+      "convolution" -> "avg",
+      "convolution" -> "stddev_pop"
+    ))*/
+
+    var ratstats = sqlContext.sql("select rat, dt, channel, frequency, AVG(convolution) as mean, STDDEV_POP(convolution) as sd from ratsaverage group by rat, dt, channel, frequency")
+    println("ratsstats schema")
+    ratstats.printSchema()
+    //ratstats.show(20)
+    ratstats.registerTempTable("ratstats")
+    println("Ratstats :" + ratstats.count())
+
+    ratstats = null
+
+    println("generating where condition")
+    var passesrecords = sc.textFile("hdfs:///neuro/output/passes/R192-2009-11-19_Passes.csv").map(_.toString.split(","))
+    val mintimes = passesrecords.map(x => x(0).trim).collect()
+    val maxtimes = passesrecords.map(x => x(1).trim).collect()
+    val whereCondition = this.concatWhereCondition(mintimes, maxtimes)
+    println(whereCondition)
+
+    //joinRatsavg = joinRatsavg.withColumnRenamed("rat", "rat1").withColumnRenamed("dt", "dt1").withColumnRenamed("channel", "channel1").withColumnRenamed("frequency", "frequency1")
+    //var ratssubset = ratstats.join(joinRatsavg,  ratstats("rat") === joinRatsavg("rat") && ratstats("dt") === joinRatsavg("dt") && ratstats("channel") === joinRatsavg("channel") && ratstats("frequency") === joinRatsavg("frequency")).select("rat", "dt", "channel", "time", "frequency" ,"((convolution - mean)/sd)").where(joinRatsavg("time").equalTo(""))
+
+    var ratssubset = sqlContext.sql("select r.rat, r.time, r.dt, r.time, r.channel, r.frequency, ((r.convolution - s.mean)/s.sd) as convolution from ratsaverage r join ratstats s on (r.rat = s.rat AND r.dt = s.dt AND r.channel = s.channel AND r.frequency = s.frequency) where " + whereCondition)
+    ratssubset.printSchema()
+    ratssubset.registerTempTable("ratssubset")
+    println("Ratssubset records:" + ratssubset.count())
+    //ratssubset.show(20)
+
+    var phasebuckets = sc.textFile("hdfs:///neuro/output/phase/R192-2009-11-19-Phase.csv").map(_.toString.split(",")).map(p => PhaseBucket(p(0).trim.toInt, ((((p(1).trim.toInt - minPhase)/(maxphase - minPhase)) * numBuckets) + 1).toInt)).toDF()
+    phasebuckets.show(50)
+    println("Phasebucket count: " +phasebuckets.count())
+    phasebuckets.registerTempTable("phasebuckets")
+
+    var results = sqlContext.sql("select r.rat, r.dt, r.channel, r.frequency, p.phaserange, AVG(r.convolution) as convolution from ratssubset r join phasebuckets p on (r.time = p.time) group by r.rat, r.dt, r.channel, r.frequency, p.phaserange")
+    results.printSchema()
+    println("Results: " + results.count())
+    //results.show(20)
+
+
+    var finalResult = results.filter(results("rat").equalTo("R192") && results("dt").equalTo("2009-11-19")).select("frequency", "phaserange", "convolution")
+    finalResult.rdd.coalesce(1, false).saveAsTextFile("resultspark")
+    println("result generated")
     //val withValues = records.map(x => RatRecord(x.getTime, x.getFrequency, x.getConvolution)).toDF()
     //val withValues = ratRDD.map(_.split(",")).map(x => RatRecord(x(0).toInt, x(1).toInt, x(2).toFloat)).toDF()
     //val withValues = records.toDF()
@@ -112,6 +200,17 @@ object Convolution {
 
   }
 
+  def concatWhereCondition(minTimes: Array[String], maxTimes: Array[String]): String = {
+    var whereCondition = ""
+    for(i <- 0 until minTimes.size) {
+      whereCondition = whereCondition + "((r.time >= " + minTimes(i) + ") and (r.time <= " + maxTimes(i) + "))"
+      if(i < minTimes.size - 1) {
+        whereCondition = whereCondition + " OR "
+      }
+    }
+    whereCondition
+  }
+
   def createOutputFile(sc: SparkContext, sqlContext: SQLContext) {
     import sqlContext.implicits._
     ratRDD = sc.parallelize(ratRecords, 1)
@@ -119,7 +218,7 @@ object Convolution {
     //val withValues = ratRDD.map(_.split(",")).map(x => RatRecord(x(0).toInt, x(1).toInt, x(2).toFloat)).toDF()
     //val withValues = records.map(x => RatRecord(x.getTime, x.getFrequency, x.getConvolution)).toDf()
     //println("Started creating out file")
-    withValues.save("rats.parquet", SaveMode.Append)
+    withValues.save("rats/" + this.generateFileName("R192-2009-11-19-CSC10a.csv"), SaveMode.Append)
     //val withValues = records.map(_).toDF()
     //println("Creating avro job")
   }
@@ -194,15 +293,15 @@ object Convolution {
     indexEnd = fname.indexOf('.', indexBegin)
     channelid = fname.substring(indexBegin, indexEnd)
 
-    println("Generated output filename")
+    //println("Generated output filename")
 
-    return "rat=" + ratnumber + "/dt=" + sessiondate + "/channel=" + channelid + "/" + ratnumber + "-" + sessiondate + "-" + channelid
+    //return "rat=" + ratnumber + "/dt=" + sessiondate + "/channel=" + channelid + "/" + ratnumber + "-" + sessiondate + "-" + channelid
+    return "rat=" + ratnumber + "/dt=" + sessiondate + "/channel=" + channelid
   }
 
   def cleanup(sc: SparkContext, sqlContext: SQLContext) {
     import sqlContext.implicits._
     var count:Int = 0
-    //var rat:Rat = new Rat()
     println("Starting Convolution")
     val fft: FloatFFT_1D = new FloatFFT_1D(SIGNAL_BUFFER_SIZE / 2)
     try {
@@ -237,9 +336,6 @@ object Convolution {
 
         for (i <- (SIGNAL_BUFFER_SIZE / 2 - KERNEL_WINDOW_SIZE + 1) * 2 until (SIGNAL_BUFFER_SIZE / 2 - nIndex) * 2 by -2) {
 
-          /*rat.setTime(timestamp(t).toInt)
-          rat.setFrequency(k.toInt)
-          rat.setConvolution(Math.pow(kernel(i), 2).toFloat)*/
           ratRecords(count) = RatRecord(timestamp(t).toInt, k.toInt, Math.pow(kernel(i), 2).toFloat)
           //ratRecords(count) = timestamp(t).toInt + ","+ k.toInt +","+ Math.pow(kernel(i), 2).toFloat
           //println(rat.getTime + "--" + rat.getFrequency + "----"+ rat.getConvolution)
@@ -251,6 +347,7 @@ object Convolution {
             this.createOutputFile(sc, sqlContext)
             //ratRDD = (ratRDD ++ sc.parallelize(ratRecords.slice(0, count), 196)).coalesce(196)
             //throw new IOException("Self created exception occured")
+            println("Final count: "  + count)
             count = 0
           }
         }
