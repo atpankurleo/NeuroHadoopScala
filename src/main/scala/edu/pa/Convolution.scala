@@ -168,10 +168,10 @@ object Convolution {
     println("Ratssubset records:" + ratssubset.count())
     //ratssubset.show(20)
 
-    var phasebuckets = sc.textFile("hdfs:///neuro/output/phase/R192-2009-11-19-Phase.csv").map(_.toString.split(",")).map(p => PhaseBucket(p(0).trim.toInt, ((((p(1).trim.toInt - minPhase)/(maxphase - minPhase)) * numBuckets) + 1).toInt)).toDF()
-    phasebuckets.show(50)
+    var phasebuckets = sc.textFile("hdfs:///neuro/output/phase/R192-2009-11-19-Phase.csv").map(_.toString.split(",")).map(p => PhaseBucket(p(0).trim.toInt, (Math.floor(((p(1).trim.toInt - minPhase).toDouble/(maxphase - minPhase).toDouble) * numBuckets) + 1).toInt)).toDF()
     println("Phasebucket count: " +phasebuckets.count())
     phasebuckets.registerTempTable("phasebuckets")
+    phasebuckets.rdd.saveAsTextFile("phasebuckets")
 
     var results = sqlContext.sql("select r.rat, r.dt, r.channel, r.frequency, p.phaserange, AVG(r.convolution) as convolution from ratssubset r join phasebuckets p on (r.time = p.time) group by r.rat, r.dt, r.channel, r.frequency, p.phaserange")
     results.printSchema()
